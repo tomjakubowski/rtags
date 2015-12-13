@@ -1,7 +1,6 @@
 #!/bin/bash
-
 if [ "$RTAGS_GCC_WRAPPER" = "1" ]; then
-    echo 1>&2 "Recursive invocation of gcc-rtags-wrapper.sh detected"
+    echo 1>&2 "Recursive invocation of gcc-rtags-wrapper detected."
     exit 1
 fi
 
@@ -35,7 +34,7 @@ fi
 # tup support end
 
 rc=$(which rc)
-for i in $(which -a "$(basename "$0")"); do
+for i in $(which -a "$(basename $0)"); do
     filename="$i"
     max=10
     while [ $max -gt 0 -a -L "$filename" ]; do
@@ -49,7 +48,7 @@ for i in $(which -a "$(basename "$0")"); do
     done
 
     filename=$(basename "$filename")
-    if [ "$filename" != "gcc-rtags-wrapper.sh" ] && [ -z "$PLAST" -o "$filename" != "plastc" ]; then
+    if [ "$filename" != "gcc-rtags-wrapper" ] && [ -z "$PLAST" -o "$filename" != "plastc" ]; then
         [ -n "$RTAGS_SERVER_FILE" ] && RTAGS_ARGS="$RTAGS_ARGS -n$RTAGS_SERVER_FILE"
         [ -n "$RTAGS_PROJECT" ] && RTAGS_ARGS="$RTAGS_ARGS --project-root=$RTAGS_PROJECT"
         [ -z "$RTAGS_COMPILE_TIMEOUT" ] && RTAGS_COMPILE_TIMEOUT=3000
