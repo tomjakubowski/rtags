@@ -135,13 +135,6 @@ if (CYGWIN)
     EnsureLibraries(rdm rct)
 endif ()
 
-if (NOT "${PROJECT_SOURCE_DIR}" STREQUAL "${PROJECT_BINARY_DIR}")
-    file (GLOB binFiles "${PROJECT_SOURCE_DIR}/bin/*")
-    file (MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/bin")
-    message("Copying files from ${PROJECT_SOURCE_DIR}/bin to ${PROJECT_BINARY_DIR}/bin")
-    file (COPY ${binFiles} DESTINATION "${PROJECT_BINARY_DIR}/bin")
-endif ()
-
 if (EMACS)
     set(EMACS_EXECUTABLE ${EMACS})
 else ()
