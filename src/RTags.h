@@ -51,7 +51,7 @@ namespace RTags {
 enum {
     MajorVersion = 2,
     MinorVersion = 0,
-    DatabaseVersion = 83,
+    DatabaseVersion = 84,
     SourcesFileVersion = 4
 };
 
@@ -555,6 +555,31 @@ inline int targetRank(CXCursorKind kind)
         return 2;
     }
 }
+
+inline void filterTargets(Set<Symbol> &targets)
+{
+    MultiMap<int, Symbol> filtered;
+    int last = -1;
+    bool different = false;
+    for (const auto &t : targets) {
+        const int rank = targetRank(t.kind);
+        if (last != -1 && rank != last)
+            different = true;
+        last = rank;
+        filtered.insert(std::make_pair(rank, t));
+    }
+    if (different) {
+        auto it = filtered.end();
+        --it;
+        const int rank = it->first;
+        targets.clear();
+        while (it->first == rank) {
+            targets.insert(it->second);
+            --it;
+        }
+    }
+}
+
 inline Symbol bestTarget(const Set<Symbol> &targets)
 {
     Symbol ret;
@@ -568,6 +593,7 @@ inline Symbol bestTarget(const Set<Symbol> &targets)
     }
     return ret;
 }
+
 static inline String xmlEscape(const String& xml)
 {
     if (xml.isEmpty())

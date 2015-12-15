@@ -22,7 +22,7 @@
 struct Dep : public DependencyNode
 {
     Dep(uint32_t f)
-        : DependencyNode(f)
+        : DependencyNode(f, NullFlags)
     {}
     Hash<uint32_t, Map<Location, Location> > references;
 };
@@ -86,11 +86,20 @@ CXChildVisitResult DumpThread::visit(const CXCursor &cursor)
                 }
             }
             CXCursor ref = clang_getCursorReferenced(cursor);
+            bool recurse = false;
             if (clang_equalCursors(ref, cursor)) {
                 message.append("refs self");
             } else if (!clang_equalCursors(ref, nullCursor)) {
                 message.append("refs ");
                 message.append(RTags::cursorToString(ref, RTags::AllCursorToStringFlags));
+                const int count = clang_Cursor_getNumTemplateArguments(ref);
+                for (int i=0; i<count; ++i) {
+                    CXCursor typeCursor = clang_getTypeDeclaration(clang_Cursor_getTemplateArgumentType(ref, i));
+                    if (Symbol::isClass(clang_getCursorKind(typeCursor))) {
+                        recurse = true;
+                        break;
+                    }
+                }
             }
 
             CXCursor canonical = clang_getCanonicalCursor(cursor);
@@ -106,6 +115,13 @@ CXChildVisitResult DumpThread::visit(const CXCursor &cursor)
             }
 
             writeToConnetion(message);
+            if (recurse) {
+                ++mIndentLevel;
+                clang_visitChildren(ref, DumpThread::visitor, this);
+                if (isAborted())
+                    return CXChildVisit_Break;
+                --mIndentLevel;
+            }
         }
     }
     ++mIndentLevel;

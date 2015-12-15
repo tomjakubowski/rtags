@@ -60,7 +60,7 @@ ClangIndexer::ClangIndexer()
       mBlocked(0), mAllowed(0), mIndexed(1), mVisitFileTimeout(0),
       mIndexDataMessageTimeout(0), mFileIdsQueried(0), mFileIdsQueriedTime(0),
       mCursorsVisited(0), mLogFile(0), mConnection(Connection::create(RClient::NumOptions)),
-      mUnionRecursion(false)
+      mRecurseState(NoRecurse), mTemplateRecurseFileId(0)
 {
     mConnection->newMessage().connect(std::bind(&ClangIndexer::onMessage, this,
                                                 std::placeholders::_1, std::placeholders::_2));
@@ -612,11 +612,18 @@ CXChildVisitResult ClangIndexer::indexVisitor(CXCursor cursor, CXCursor parent, 
     const RTags::CursorType type = RTags::cursorType(kind);
     if (type == RTags::Type_Other) {
         return CXChildVisit_Recurse;
+    } else if (indexer->mRecurseState == TemplateRecurse && type != RTags::Type_Reference) {
+        return CXChildVisit_Continue;
     }
 
     bool blocked = false;
 
-    Location loc = indexer->createLocation(cursor, &blocked);
+    Location loc;
+    if (indexer->mRecurseState == TemplateRecurse) {
+        loc = indexer->createLocation(cursor);
+    } else {
+        loc = indexer->createLocation(cursor, &blocked);
+    }
 
     if (blocked) {
         // error() << "blocked" << cursor;
@@ -785,7 +792,8 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
 {
     if (cursorPtr)
         *cursorPtr = 0;
-    // error() << "handleReference" << cursor << kind << location << ref;
+    // error() << "handleReference" << cursor << kind << location << ref
+    //             << clang_Cursor_getNumTemplateArguments(ref);
     const CXCursorKind refKind = clang_getCursorKind(ref);
     if (clang_isInvalid(refKind)) {
         return superclassTemplateMemberFunctionUgleHack(cursor, kind, location, ref, parent, cursorPtr);
@@ -819,6 +827,7 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
         return false;
     }
 
+    CXCursor refUsrCursor = ref;
     switch (refKind) {
     case CXCursor_Constructor:
     case CXCursor_CXXMethod:
@@ -826,9 +835,9 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
     case CXCursor_Destructor:
     case CXCursor_FunctionTemplate: {
         while (true) {
-            const CXCursor general = clang_getSpecializedCursorTemplate(ref);
+            const CXCursor general = clang_getSpecializedCursorTemplate(refUsrCursor);
             if (!clang_Cursor_isNull(general) && createLocation(general) == refLoc) {
-                ref = general;
+                refUsrCursor = general;
             } else {
                 break;
             }
@@ -857,15 +866,22 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
         break;
     }
 
-    const String refUsr = usr(ref);
+    const String refUsr = usr(refUsrCursor);
     if (refUsr.isEmpty()) {
         return false;
     }
 
     FindResult result;
     auto reffedCursor = findSymbol(refLoc, &result);
-    Map<String, uint16_t> &targets = unit(location)->targets[location];
-    if (result == NotFound && !mUnionRecursion) {
+    std::shared_ptr<Unit> u;
+    if (mRecurseState == TemplateRecurse) {
+        assert(mTemplateRecurseFileId);
+        u = unit(mTemplateRecurseFileId);
+    } else {
+        u = unit(location);
+    }
+    Map<String, uint16_t> &targets = u->targets[location];
+    if (result == NotFound && mRecurseState == NoRecurse) {
         CXCursor parent = clang_getCursorSemanticParent(ref);
         CXCursor best = ClangIndexer::nullCursor;
         while (true) {
@@ -876,11 +892,11 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
             parent = clang_getCursorSemanticParent(parent);
         }
         if (best == CXCursor_UnionDecl) {
-            mUnionRecursion = true;
+            mRecurseState = UnionRecurse;
             // for anonymous unions we don't get to their fields with normal
             // recursing of the AST. In these cases we visit the union decl
             clang_visitChildren(best, ClangIndexer::indexVisitor, this);
-            mUnionRecursion = false;
+            mRecurseState = NoRecurse;
             reffedCursor = findSymbol(refLoc, &result);
         }
     }
@@ -893,7 +909,7 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
 
     assert(!refUsr.isEmpty());
     targets[refUsr] = refTargetValue;
-    Symbol &c = unit(location)->symbols[location];
+    Symbol &c = u->symbols[location];
     if (cursorPtr)
         *cursorPtr = &c;
 
@@ -966,12 +982,29 @@ bool ClangIndexer::handleReference(const CXCursor &cursor, CXCursorKind kind,
         c.symbolLength = result == Found ? reffedCursor.symbolLength : symbolLength(refKind, ref);
     }
     if (!c.symbolLength) {
-        unit(location)->symbols.remove(location);
+        u->symbols.remove(location);
         if (cursorPtr)
             *cursorPtr = 0;
         return false;
     }
     setType(c, clang_getCursorType(cursor));
+    if (mRecurseState == NoRecurse) {
+        const int count = clang_Cursor_getNumTemplateArguments(ref);
+        // if (debug)
+        //     error() << "COUNT" << ref << cursor << count;
+        for (int i=0; i<count; ++i) {
+            CXCursor templateType = clang_getTypeDeclaration(clang_Cursor_getTemplateArgumentType(ref, i));
+            if (Symbol::isClass(clang_getCursorKind(templateType))) {
+                mRecurseState = TemplateRecurse;
+                mTemplateRecurseFileId = location.fileId();
+                mIndexDataMessage.files()[mTemplateRecurseFileId] |= IndexDataMessage::HasTemplateInstantiations;
+                clang_visitChildren(ref, ClangIndexer::indexVisitor, this);
+                mRecurseState = NoRecurse;
+                mTemplateRecurseFileId = 0;
+                break;
+            }
+        }
+    }
 
     return true;
 }
@@ -1198,6 +1231,7 @@ bool ClangIndexer::handleCursor(const CXCursor &cursor, CXCursorKind kind, const
         switch (c.kind) {
         case CXCursor_FunctionDecl:
         case CXCursor_VarDecl: {
+            mIndexDataMessage.files()[location.fileId()] |= IndexDataMessage::HasExterns;
             const auto kind = clang_getCursorKind(clang_getCursorSemanticParent(cursor));
             switch (kind) {
             case CXCursor_ClassDecl:

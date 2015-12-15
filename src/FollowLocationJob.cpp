@@ -42,22 +42,25 @@ int FollowLocationJob::execute()
         }
     }
 
-    const auto target = project()->findTarget(symbol);
-    if (target.isNull())
+    auto targets = project()->findTargets(symbol);
+    RTags::filterTargets(targets);
+    if (targets.isEmpty())
         return 1;
 
-    if (symbol.usr == target.usr) {
-        write(target.location);
-        return 0;
-    }
-
-    if (queryFlags() & QueryMessage::DeclarationOnly ? target.isDefinition() : !target.isDefinition()) {
-        const auto other = project()->findTarget(target);
-        if (!other.isNull() && other.usr == target.usr) {
-            write(other.location);
-            return 0;
+    for (const auto &target : targets) {
+        if (symbol.usr == target.usr) {
+            write(target.location);
+            continue;
         }
+
+        if (queryFlags() & QueryMessage::DeclarationOnly ? target.isDefinition() : !target.isDefinition()) {
+            const auto other = project()->findTarget(target);
+            if (!other.isNull() && other.usr == target.usr) {
+                write(other.location);
+                continue;
+            }
+        }
+        write(target.location);
     }
-    write(target.location);
     return 0;
 }

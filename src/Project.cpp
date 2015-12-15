@@ -217,7 +217,9 @@ static void loadDependencies(DataFile &file, Dependencies &dependencies)
     for (int i=0; i<size; ++i) {
         uint32_t fileId;
         file >> fileId;
-        dependencies[fileId] = new DependencyNode(fileId);
+        Flags<DependencyNode::Flag> flags;
+        file >> flags;
+        dependencies[fileId] = new DependencyNode(fileId, flags);
     }
     for (int i=0; i<size; ++i) {
         int links;
@@ -242,7 +244,7 @@ static void saveDependencies(DataFile &file, const Dependencies &dependencies)
 {
     file << dependencies.size();
     for (const auto &it : dependencies) {
-        file << it.first;
+        file << it.first << it.second->flags;
     }
     for (const auto &it : dependencies) {
         file << it.second->dependents.size();
@@ -1041,17 +1043,25 @@ void Project::updateDependencies(const std::shared_ptr<IndexDataMessage> &msg)
     Set<uint32_t> files;
     for (auto pair : msg->files()) {
         DependencyNode *&node = mDependencies[pair.first];
+        Flags<DependencyNode::Flag> flags;
+        if (pair.second & IndexDataMessage::HasExterns)
+            flags |= DependencyNode::HasExterns;
+        if (pair.second & IndexDataMessage::HasTemplateInstantiations)
+            flags |= DependencyNode::HasTemplateInstantiations;
         if (!node) {
-            node = new DependencyNode(pair.first);
+            node = new DependencyNode(pair.first, flags);
             if (pair.second & IndexDataMessage::Visited)
                 files.insert(pair.first);
         } else if (pair.second & IndexDataMessage::Visited) {
+            node->flags |= flags;
             files.insert(pair.first);
             if (prune) {
                 for (auto it : node->includes)
                     it.second->dependents.remove(pair.first);
                 node->includes.clear();
             }
+        } else {
+            node->flags |= flags;
         }
         watchFile(pair.first);
     }
@@ -1062,10 +1072,8 @@ void Project::updateDependencies(const std::shared_ptr<IndexDataMessage> &msg)
         DependencyNode *&inclusiary = mDependencies[it.second];
         files.insert(it.first);
         files.insert(it.second);
-        if (!includer)
-            includer = new DependencyNode(it.first);
-        if (!inclusiary)
-            inclusiary = new DependencyNode(it.second);
+        assert(includer);
+        assert(inclusiary);
         includer->include(inclusiary);
     }
 }
@@ -1516,6 +1524,7 @@ Set<Symbol> Project::findTargets(const Symbol &symbol)
 
 Set<Symbol> Project::findByUsr(const String &usr, uint32_t fileId, DependencyMode mode, const Location &filtered)
 {
+    StopWatch sw;
     assert(fileId);
     Set<Symbol> ret;
     if (usr.startsWith("/")) {
@@ -1539,7 +1548,10 @@ Set<Symbol> Project::findByUsr(const String &usr, uint32_t fileId, DependencyMod
             // }
         }
     }
+    double check = sw.elapsed();
+    bool shit = false;
     if (ret.isEmpty() || (!filtered.isNull() && ret.size() == 1 && ret.begin()->location == filtered)) {
+        shit = true;
         for (const auto &dep : mDependencies) {
             auto usrs = openUsrs(dep.first);
             if (usrs) {
@@ -1552,6 +1564,7 @@ Set<Symbol> Project::findByUsr(const String &usr, uint32_t fileId, DependencyMod
         }
     }
 
+    error() << "findByUsr" << shit << sw.elapsed() << check;
     return ret;
 }
 
